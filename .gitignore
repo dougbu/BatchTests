@@ -1,0 +1,17 @@
+# Folders
+bin/
+obj/
+packages/
+PublishProfiles/
+ServiceDependencies/
+.vs/
+.vscode/
+
+# File extensions
+*.binlog
+*.log
+*.suo
+*.user
+*.userprefs
+
+UpgradeLog.htm
