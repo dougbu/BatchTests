@@ -1,40 +1,71 @@
-﻿const string BaseAddress = "http://192.168.86.21:5555/api/";
+﻿using System.Text;
 
+const string DefaultBaseAddress = "http://192.168.86.198:5555/api/";
+
+var baseAddress = args.Length >= 1 && !string.IsNullOrEmpty(args[0]) ? args[0] : DefaultBaseAddress;
+var batched = args.Length >= 2 && bool.Parse(args[1]);
+var complete = args.Length >= 3 && bool.Parse(args[2]);
+var parts = batched && args.Length >= 4 && bool.Parse(args[3]);
+var innerResponse = batched && args.Length >=5 && bool.Parse(args[4]);
+
+var completion = complete ? HttpCompletionOption.ResponseContentRead : HttpCompletionOption.ResponseHeadersRead;
 var handler = new HttpClientHandler { AllowAutoRedirect = false, };
-var client = new HttpClient(handler) { BaseAddress = new Uri(BaseAddress), };
-
-var response = await client.GetAsync("Values/accepted");
-await DisplayResponse("accepted", response);
-
-//response = await client.GetAsync("Values/bad");
-//await DisplayResponse("bad", response);
-
-//response = await client.GetAsync("Values/error");
-//await DisplayResponse("error", response);
-
-//response = await client.GetAsync("Values/redirect");
-//await DisplayResponse("redirect", response);
-
-var content = new MultipartContent("mixed", "batch_" + Guid.NewGuid().ToString());
-content.Add(new HttpMessageContent(new HttpRequestMessage(HttpMethod.Get, $"{BaseAddress}Values/accepted")));
-content.Add(new HttpMessageContent(new HttpRequestMessage(HttpMethod.Get, $"{BaseAddress}Values/bad")));
-content.Add(new HttpMessageContent(new HttpRequestMessage(HttpMethod.Get, $"{BaseAddress}Values/error")));
-content.Add(new HttpMessageContent(new HttpRequestMessage(HttpMethod.Get, $"{BaseAddress}Values/redirect")));
-
-var request = new HttpRequestMessage(HttpMethod.Post, "batch") { Content = content, };
-response = await client.SendAsync(request);
-
-var responseContents = await response.Content.ReadAsMultipartAsync();
-var i = 0;
-foreach(var innerContent in responseContents.Contents)
+var client = new HttpClient(handler);
+var requests = new SortedDictionary<string, HttpRequestMessage>
 {
-    Console.WriteLine("---");
-    await DisplayContent($"direct batch {i}", innerContent);
-    Console.WriteLine("---");
-    await DisplayResponse($"batch {i++}", await innerContent.ReadAsHttpResponseMessageAsync());
-}
+    { "accepted", new HttpRequestMessage(HttpMethod.Get, $"{baseAddress}Values/accepted") },
+    { "bad", new HttpRequestMessage(HttpMethod.Get, $"{baseAddress}Values/bad") },
+    { "error", new HttpRequestMessage(HttpMethod.Get, $"{baseAddress}Values/error") },
+    { "get", new HttpRequestMessage(HttpMethod.Get, $"{baseAddress}Values") },
+    { "redirect", new HttpRequestMessage(HttpMethod.Get, $"{baseAddress}Values/redirect") },
+};
 
-await DisplayResponse("batch", response);
+if (batched)
+{
+    var content = new MultipartContent("mixed", "batch_" + Guid.NewGuid().ToString());
+    foreach (var request in requests.Values)
+    {
+        content.Add(new HttpMessageContent(request));
+    }
+
+    var batchedRequest = new HttpRequestMessage(HttpMethod.Post, $"{baseAddress}batch") { Content = content, };
+    var response = await client.SendAsync(batchedRequest, completion);
+
+    // Can successfully display the response or its parts but can't do both together in some cases. Either
+    // ReadAsMultipartAsync throws an IOException wrapping a WebException about an aborted request or
+    // DisplayResponse (well, StreamContent.ReadAsStringAsync()) shows response.Content as empty, depending on
+    // which executes second. In .NET Framework at least, can do both together when complete==true.
+    if (parts)
+    {
+        var responseContents = await response.Content.ReadAsMultipartAsync();
+        var i = 0;
+        foreach (var innerContent in responseContents.Contents)
+        {
+            // For newer .NET Core releases, cannot get the Stream twice (second time to read the
+            // HttpResponseMessage). This fails even if the response itself was complete initially.
+            if (innerResponse)
+            {
+                await DisplayResponse($"batch {i++}", await innerContent.ReadAsHttpResponseMessageAsync());
+            }
+            else
+            {
+                await DisplayContent($"direct batch {i}", innerContent);
+            }
+        }
+    }
+    else
+    {
+        await DisplayResponse("batch", response);
+    }
+}
+else
+{
+    foreach (var keyValuePair in requests)
+    {
+        var response = await client.SendAsync(keyValuePair.Value, completion);
+        await DisplayResponse(keyValuePair.Key, response);
+    }
+}
 
 static Task DisplayResponse(string name, HttpResponseMessage response)
 {
@@ -52,28 +83,15 @@ static async Task DisplayContent(string name, HttpContent content)
     {
         Console.WriteLine($"{name} content.GetType().Name: {content.GetType().Name}");
         //Console.WriteLine($"content.Headers: {content.Headers}");
+        Console.WriteLine($"content.Headers.ContentLength: {content.Headers.ContentLength}");
 
         var stream = await content.ReadAsStreamAsync();
         Console.WriteLine($"stream.GetType().Name: {stream.GetType().Name}");
-        Console.WriteLine($"CanRead: {stream.CanRead}, CanSeek: {stream.CanSeek}, CanWrite: {stream.CanWrite}");
+        Console.WriteLine($"CanRead: {stream.CanRead}, CanSeek: {stream.CanSeek}, CanWrite: {stream.CanWrite}, " +
+            $"Length: {(stream.CanSeek ? stream.Length.ToString() : "unknowable")}");
 
-        try
-        {
-            var length = stream.Length;
-            Console.WriteLine($"Length: {length}");
-        }
-        catch (Exception exception)
-        {
-            Console.WriteLine($"Length: {exception.GetType().Name}, {exception.Message}");
-        }
-
-        try
-        {
-            Console.WriteLine($"'{await content.ReadAsStringAsync()}'");
-        }
-        catch (Exception exception)
-        {
-            Console.WriteLine($"ReadAsStringAsync: {exception}");
-        }
+        Console.WriteLine($"'{await content.ReadAsStringAsync()}'");
     }
+
+    Console.WriteLine("---");
 }
