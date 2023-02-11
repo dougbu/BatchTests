@@ -90,7 +90,23 @@ static async Task DisplayContent(string name, HttpContent content)
         Console.WriteLine($"CanRead: {stream.CanRead}, CanSeek: {stream.CanSeek}, CanWrite: {stream.CanWrite}, " +
             $"Length: {(stream.CanSeek ? stream.Length.ToString() : "unknowable")}");
 
-        Console.WriteLine($"'{await content.ReadAsStringAsync()}'");
+        try
+        {
+            // May fail in later .NET core releases because a read only stream has already been consumed
+            // under the covers.
+            Console.WriteLine($"'{await content.ReadAsStringAsync()}'");
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine($"ReadAsStringAsync: ${exception}");
+            using var reader = new StreamReader(
+                stream,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true,
+                bufferSize: 1024,
+                leaveOpen: true);
+            Console.WriteLine($"'{await reader.ReadToEndAsync()}'");
+        }
     }
 
     Console.WriteLine("---");
